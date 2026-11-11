@@ -1,0 +1,14 @@
+// förslag på requirements
+faster-whisper
+pymupdf
+python-pptx
+imagehash
+Pillow
+opencv-python
+pytesseract
+numpy
+streamlit
+fastapi
+uvicorn
+sentence-transformers
+pytest
