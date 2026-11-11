@@ -218,3 +218,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Vad vi adderar till gitignore
+.venv/
+data/*
+!data/sample/.gitkeep
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.pptx
+*.pdf
+output/
+frames/
+models/
