@@ -1,4 +1,4 @@
-// förslag på requirements
+# Project dependencies
 faster-whisper
 pymupdf
 python-pptx
