@@ -1,6 +1,10 @@
 
 import json
 from pathlib import Path
+from src.savings.duplicate_savings import (
+    find_duplicates,
+    calculate_duplicate_savings
+)
 
 from src.savings.calculator import (
     calculate_directory_size,
@@ -41,3 +45,20 @@ def save_report(report: dict, output_file: str | Path) -> None:
         json.dumps(report, indent=4),
         encoding="utf-8"
     )
+
+
+def create_duplicate_report(directory: str | Path) -> dict:
+    """Create a report of duplicate files and potential storage savings."""
+
+    directory = Path(directory)
+
+    duplicates = find_duplicates(directory)
+    savings = calculate_duplicate_savings(duplicates)
+
+    return {
+        "directory": str(directory),
+        "duplicate_groups": savings["duplicate_groups"],
+        "total_duplicate_groups": len(savings["duplicate_groups"]),
+        "potential_saved_bytes": savings["total_saved_bytes"],
+        "automatic_deletion": False
+    }
