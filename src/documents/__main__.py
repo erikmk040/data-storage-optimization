@@ -47,6 +47,12 @@ def main(argv: list[str] | None = None) -> int:
     offboarding.add_argument("--remaining-copy")
     offboarding.add_argument("--access-confirmations", type=Path,
                             help="JSON object mapping remaining copy IDs to continued-team-access evidence")
+    recording = commands.add_parser("match-recording", help="resolve compatible keyframes to exact slide revisions")
+    recording.add_argument("package", type=Path)
+    recording.add_argument("--calibration", required=True)
+    recording.add_argument("--capture-evidence", required=True)
+    recording.add_argument("--doc-id", help="optional exact-version context supplied by the caller")
+    recording.add_argument("--output", type=Path, help="create a new Role C-compatible package without overwriting files")
     args = parser.parse_args(argv)
     try:
         with Registry(args.db) as registry:
@@ -92,6 +98,13 @@ def main(argv: list[str] | None = None) -> int:
                 result = offboarding_report(registry, args.copy_id, verified_by=args.verified_by,
                                              access_confirmations=confirmations,
                                              remaining_copy_id=args.remaining_copy)
+            elif args.command == "match-recording":
+                from .video_matching import match_recording, write_matched_package
+                result = match_recording(registry, args.package, calibration_id=args.calibration,
+                                          capture_evidence=args.capture_evidence, doc_id=args.doc_id)
+                if args.output:
+                    write_matched_package(result, args.package, args.output)
+                    result["output_file"] = str(args.output)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     except (OSError, ValueError, RuntimeError, KeyError, sqlite3.Error, BadZipFile,
             PythonPptxError, subprocess.SubprocessError) as error:
