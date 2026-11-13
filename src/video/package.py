@@ -57,6 +57,25 @@ def probe_video(video_path: Path) -> dict[str, Any]:
     }
 
 
+def has_audio_stream(video_path: Path) -> bool:
+    """Return whether the input contains at least one audio stream."""
+    result = _run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "json",
+            str(video_path),
+        ]
+    )
+    return bool(json.loads(result.stdout).get("streams"))
+
+
 def _frame_times(output: str) -> list[float]:
     return [float(match.group("time")) for match in SHOWINFO_TIME.finditer(output)]
 
@@ -171,7 +190,12 @@ def build_package(
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata = probe_video(video_path)
     frames = extract_keyframes(video_path, output_dir / "frames")
-    raw_segments = transcribe(video_path, model_name) if transcribe_audio else []
+    if transcribe_audio and has_audio_stream(video_path):
+        raw_segments = transcribe(video_path, model_name)
+    else:
+        raw_segments = []
+        if transcribe_audio:
+            print("warning: input has no audio stream; skipping transcription")
     segments = [
         {**segment, "frame_id": _frame_for_time(frames, segment["start"])}
         for segment in raw_segments
