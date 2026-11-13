@@ -26,7 +26,7 @@ def profile_definition() -> dict:
         "hash": "imagehash.phash", "hash_size": 8, "highfreq_factor": 4,
         "imagehash_version": version("imagehash"), "pillow_version": version("Pillow"),
         "numpy_version": version("numpy"), "scipy_version": version("scipy"),
-        "low_information": "grayscale standard deviation < 1.0 is excluded",
+        "low_information": "unpadded source grayscale standard deviation < 1.0 is excluded",
     }
 
 
@@ -36,19 +36,24 @@ def profile_identity(definition: dict) -> str:
     ).hexdigest()
 
 
-def canonical_image(image: Image.Image) -> Image.Image:
+def _opaque_image(image: Image.Image) -> Image.Image:
     image = ImageOps.exif_transpose(image).convert("RGBA")
     white = Image.new("RGBA", image.size, "white")
     white.alpha_composite(image)
-    scaled = ImageOps.contain(white.convert("RGB"), (1280, 960), Image.Resampling.LANCZOS)
+    return white.convert("RGB")
+
+
+def canonical_image(image: Image.Image) -> Image.Image:
+    scaled = ImageOps.contain(_opaque_image(image), (1280, 960), Image.Resampling.LANCZOS)
     canvas = Image.new("RGB", (1280, 960), "white")
     canvas.paste(scaled, ((1280 - scaled.width) // 2, (960 - scaled.height) // 2))
     return canvas
 
 
 def image_fingerprint(image: Image.Image) -> dict:
-    canvas = canonical_image(image)
-    informative = ImageStat.Stat(canvas.convert("L")).stddev[0] >= 1.0
+    opaque = _opaque_image(image)
+    canvas = canonical_image(opaque)
+    informative = ImageStat.Stat(opaque.convert("L")).stddev[0] >= 1.0
     return {
         "phash": str(imagehash.phash(canvas, hash_size=8, highfreq_factor=4)) if informative else None,
         "image_sha256": hashlib.sha256(canvas.tobytes()).hexdigest(),
