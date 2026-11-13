@@ -1,5 +1,6 @@
 # Project dependencies
 faster-whisper
+av<18
 pymupdf
 python-pptx
 imagehash

@@ -223,6 +223,10 @@ __marimo__/
 .venv/
 data/*
 !data/sample/.gitkeep
+!data/test_inputs/
+data/test_inputs/*
+!data/test_inputs/.gitkeep
+!data/test_inputs/README.md
 *.mp4
 *.mov
 *.mkv
