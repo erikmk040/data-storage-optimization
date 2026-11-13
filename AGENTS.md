@@ -16,6 +16,18 @@ Rebuild mock data:
 python3 -m src.search.make_mock
 ```
 
+Build a video package (Roll A):
+
+```bash
+python3 -m src.video.package path/to/recording.mp4 --output data/sample/recording
+```
+
+For a frame-only smoke test without downloading a Whisper model:
+
+```bash
+python3 -m src.video.package path/to/recording.mp4 --output data/sample/recording --skip-transcription
+```
+
 Rules:
 
 - Never edit `docs/schema.md` or other roles' folders; propose changes instead.
