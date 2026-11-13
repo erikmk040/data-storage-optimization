@@ -41,6 +41,12 @@ def main(argv: list[str] | None = None) -> int:
     calibrate_parser = commands.add_parser("calibrate", help="calibrate against labeled demo image pairs")
     calibrate_parser.add_argument("profile_id")
     calibrate_parser.add_argument("pairs", type=Path, help="JSON array: left, right, same_slide")
+    offboarding = commands.add_parser("offboarding", help="report remaining-copy evidence; never delete files")
+    offboarding.add_argument("copy_id")
+    offboarding.add_argument("--verified-by", required=True)
+    offboarding.add_argument("--remaining-copy")
+    offboarding.add_argument("--access-confirmations", type=Path,
+                            help="JSON object mapping remaining copy IDs to continued-team-access evidence")
     args = parser.parse_args(argv)
     try:
         with Registry(args.db) as registry:
@@ -79,6 +85,13 @@ def main(argv: list[str] | None = None) -> int:
                             raise ValueError("Calibration paths must be strings")
                         pair[key] = str(args.pairs.resolve().parent / pair[key])
                 result = calibrate(registry, args.profile_id, pairs)
+            elif args.command == "offboarding":
+                from .offboarding import offboarding_report
+                confirmations = (json.loads(args.access_confirmations.read_text(encoding="utf-8"))
+                                 if args.access_confirmations else None)
+                result = offboarding_report(registry, args.copy_id, verified_by=args.verified_by,
+                                             access_confirmations=confirmations,
+                                             remaining_copy_id=args.remaining_copy)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     except (OSError, ValueError, RuntimeError, KeyError, sqlite3.Error, BadZipFile,
             PythonPptxError, subprocess.SubprocessError) as error:

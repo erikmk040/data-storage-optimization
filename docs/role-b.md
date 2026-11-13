@@ -115,6 +115,30 @@ evidence, never automatic family linking. Changes with insufficient evidence are
 reported as inserted/removed. Empty text alone never matches. Without calibration,
 only exact rendered images and text evidence can match; visual similarity is off.
 
+## Offboarding evidence
+
+```bash
+.venv/bin/python -m src.documents --db data/documents.db offboarding SOURCE_COPY_ID --verified-by reviewer
+.venv/bin/python -m src.documents --db data/documents.db offboarding SOURCE_COPY_ID \
+  --verified-by reviewer --access-confirmations /path/to/continued-access.json
+```
+
+The optional confirmations file maps a remaining `copy_id` to a nonempty evidence
+string, for example `{"copy-123": "Team folder and permissions confirmed after account removal"}`.
+This is an explicit attestation of continued access, not an automatic ACL check.
+Without it a byte-identical readable file is only an unconfirmed candidate. A copy
+still owned by the departing owner cannot qualify. `--remaining-copy COPY_ID`
+restricts verification to one candidate; otherwise all registered copies of the
+exact version are considered.
+
+Both whole files are re-read, with modification checks; a source changed since
+import, inaccessible remaining copy, revised version, or same-inode alias cannot
+produce successful evidence. A source changed during candidate verification is
+reported as unverified. No files are deleted, moved, or rewritten. Reports include
+UTC times, verifier, observed status, confirmed evidence, and limitations, and are
+persisted as JSON in the local registry's `offboarding_reports` table. Re-run to
+get fresh evidence before any separately authorized storage action.
+
 ## Tests
 
 ```bash
