@@ -52,6 +52,24 @@ CREATE TABLE IF NOT EXISTS family_links(
     id TEXT PRIMARY KEY, source_document_id TEXT NOT NULL, target_document_id TEXT NOT NULL,
     confirmed_by TEXT NOT NULL, reason TEXT NOT NULL, confirmed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS phash_profiles(
+    profile_id TEXT PRIMARY KEY, definition TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rendered_slides(
+    doc_id TEXT NOT NULL, slide_no INTEGER NOT NULL,
+    image_sha256 TEXT NOT NULL, profile_id TEXT NOT NULL REFERENCES phash_profiles(profile_id),
+    PRIMARY KEY(doc_id, slide_no),
+    FOREIGN KEY(doc_id, slide_no) REFERENCES slides(doc_id, slide_no)
+);
+CREATE TABLE IF NOT EXISTS rendering_observations(
+    doc_id TEXT PRIMARY KEY REFERENCES document_versions(doc_id),
+    profile_id TEXT NOT NULL REFERENCES phash_profiles(profile_id), provenance TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS visual_calibrations(
+    calibration_id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL REFERENCES phash_profiles(profile_id),
+    max_distance INTEGER NOT NULL CHECK(max_distance>=0 AND max_distance<=64), evidence TEXT NOT NULL
+);
 """
 
 
@@ -129,7 +147,8 @@ class Registry:
         return dict(row)
 
     def ingest(self, path: str | Path, *, owner_id: str | None = None,
-               metadata: dict | None = None) -> dict:
+               metadata: dict | None = None, render: str = "auto",
+               rendered_pdf: str | Path | None = None, render_evidence: str | None = None) -> dict:
         """Import one stable snapshot atomically; preserve IDs on reimport.
 
         Distinct canonical locations get distinct copy IDs. A changed file at the
@@ -160,12 +179,17 @@ class Registry:
                 slides = extract_slides(snapshot)
                 profile = {"extractor": "python-pptx", "version": pptx.__version__,
                            "mode": "shape/group/table order v1", "normalization": "none"}
+            from .visuals import render_source
+
+            visual = render_source(snapshot, len(slides), mode=render,
+                                   rendered_pdf=Path(rendered_pdf) if rendered_pdf else None,
+                                   render_evidence=render_evidence)
             if hash_file(path) != digest:
                 raise ValueError("Source changed during import; no records were imported")
             return self._store(path, digest, snapshot.stat().st_size, slides, profile,
-                               owner_id, metadata)
+                               owner_id, metadata, visual)
 
-    def _store(self, path, digest, size, slides, profile, owner_id, metadata):
+    def _store(self, path, digest, size, slides, profile, owner_id, metadata, visual):
         doc_id = "sha256:" + digest
         profile_json = json.dumps(profile, sort_keys=True)
         with self.connection:
@@ -198,6 +222,25 @@ class Registry:
                         self.connection.execute(
                             f"UPDATE document_versions SET {key}=? WHERE doc_id=?", (value, doc_id)
                         )
+            if visual["slides"]:
+                self.connection.execute(
+                    "INSERT OR IGNORE INTO phash_profiles VALUES (?,?)",
+                    (visual["profile_id"], json.dumps(visual["definition"], sort_keys=True)),
+                )
+                for number, fingerprint in enumerate(visual["slides"], start=1):
+                    self.connection.execute(
+                        "UPDATE slides SET phash=?,phash_profile=? WHERE doc_id=? AND slide_no=?",
+                        (fingerprint["phash"], visual["profile_id"] if fingerprint["phash"] else None,
+                         doc_id, number),
+                    )
+                    self.connection.execute(
+                        "INSERT OR REPLACE INTO rendered_slides VALUES (?,?,?,?)",
+                        (doc_id, number, fingerprint["image_sha256"], visual["profile_id"]),
+                    )
+                self.connection.execute(
+                    "INSERT OR REPLACE INTO rendering_observations VALUES (?,?,?)",
+                    (doc_id, visual["profile_id"], json.dumps(visual["provenance"], sort_keys=True)),
+                )
             uri = path.as_uri()
             previous_copy = self.connection.execute(
                 "SELECT copy_id FROM stored_copies WHERE location_uri=?", (uri,)
@@ -211,7 +254,7 @@ class Registry:
                 (copy_id, doc_id, path.name, uri, owner_id, utc_now()),
             )
         return {"document": self.document(doc_id), "copy": self.copy(copy_id),
-                "slide_count": len(slides)}
+                "slide_count": len(slides), "warnings": visual["warnings"]}
 
     def link_revisions(self, doc_id: str, target_doc_id: str, *, confirmed_by: str, reason: str):
         """Explicitly link families, retaining who confirmed the relationship and why."""

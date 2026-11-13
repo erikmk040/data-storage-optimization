@@ -12,6 +12,11 @@ from pptx.util import Inches
 from src.documents.registry import Registry, text_hash
 
 
+@pytest.fixture(autouse=True)
+def text_registry_without_native_converter(monkeypatch):
+    monkeypatch.setattr("src.documents.visuals.libreoffice_executable", lambda: None)
+
+
 def make_pdf(path, texts):
     with pymupdf.open() as document:
         for text in texts:
