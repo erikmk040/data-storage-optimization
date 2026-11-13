@@ -2,7 +2,8 @@
 import json
 from pathlib import Path
 
-from src.savings.report import create_storage_report
+from .pack import pack
+from .report import create_storage_report
 
 
 def benchmark_files(
@@ -55,3 +56,40 @@ def benchmark_files(
     )
 
     return benchmark
+
+
+def benchmark_packages(samples_root: str | Path = "data/sample", output_file: str | Path = "docs/savings.md") -> str:
+    """Pack every recording package below *samples_root* and write Markdown results."""
+    rows: list[dict] = []
+    for package_json in sorted(Path(samples_root).rglob("package.json")):
+        output = package_json.parent / (package_json.stem + ".kp")
+        report = pack(package_json, output)
+        rows.append({"package": str(package_json), "report": report})
+    lines = [
+        "# Compact package benchmark",
+        "",
+        "The benchmark measures the deterministic KP v2 archive. Generated `.kp` files remain under `data/` and are ignored by Git.",
+        "",
+        "| Package | Original video bytes | Packed bytes | Savings | Codec | Largest component |",
+        "|---|---:|---:|---:|---|---|",
+    ]
+    for row in rows:
+        report = row["report"]
+        original = report.original_video_bytes
+        savings = (1 - report.packed_bytes / original) * 100 if original else 0
+        lines.append(f"| `{row['package']}` | {original:,} | {report.packed_bytes:,} | {savings:.2f}% | {report.codec} | {report.largest_component} |".replace(",", " "))
+        lines.append("")
+        lines.append("| Step | Bytes |")
+        lines.append("|---|---:|")
+        for name, value in report.component_bytes.items():
+            lines.append(f"| {name} | {value} |")
+        lines.append("")
+    markdown = "\n".join(lines) + ("\n" if rows else "")
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(markdown, encoding="utf-8")
+    return markdown
+
+
+if __name__ == "__main__":
+    benchmark_packages()
