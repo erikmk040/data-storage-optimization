@@ -1,8 +1,14 @@
 import json
 from pathlib import Path
+
 from .db import connect
 
 def index_package(package_json: Path) -> str:
+    """Index one recording package and return its recording id.
+
+    Re-indexing the same package is safe: all rows belonging to the recording
+    are removed before the package is inserted again.
+    """
     pkg = json.loads(package_json.read_text(encoding="utf-8"))
     base = package_json.parent
     rid, src = pkg["id"], pkg["source"]

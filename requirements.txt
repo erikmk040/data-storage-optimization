@@ -1,4 +1,4 @@
-// förslag på requirements
+# Project dependencies
 faster-whisper
 pymupdf
 python-pptx
@@ -12,5 +12,3 @@ fastapi
 uvicorn
 sentence-transformers
 pytest
-Pillow
-streamlit
