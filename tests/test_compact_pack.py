@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from PIL import Image
 
 from src.savings.pack import pack, unpack
@@ -89,7 +90,7 @@ def test_unpacked_package_can_be_indexed_and_searched(tmp_path, monkeypatch):
     assert results[0]["text"] == "Unicode åäö | stays exact"
 
 
-def test_near_duplicate_frames_are_referenced(tmp_path):
+def test_identical_frames_are_referenced(tmp_path):
     package_path, package = _package(tmp_path)
     from PIL import Image
 
@@ -103,3 +104,127 @@ def test_near_duplicate_frames_are_referenced(tmp_path):
     unpack(kp, output)
     restored = json.loads((output / "package.json").read_text())
     assert restored["frames"][1]["file"] == restored["frames"][0]["file"]
+
+
+def test_roundtrip_preserves_complete_hash_references(tmp_path):
+    document_id = "sha256:" + "a" * 64
+    slide_hash = "b" * 64
+    source_hash = "c" * 64
+    package = {
+        "id": "rec_hashes",
+        "source": {"file": "meeting.mp4", "sha256": source_hash, "duration_s": 1, "size_bytes": 100},
+        "segments": [],
+        "frames": [{
+            "id": "slide-1", "t": 0, "file": "unused",
+            "slide_ref": {"doc_id": document_id, "slide_no": 1, "slide_hash": slide_hash},
+        }],
+    }
+    package_path = tmp_path / "package.json"
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    kp = tmp_path / "hashes.kp"
+    pack(package_path, kp)
+    output = unpack(kp, tmp_path / "unpacked")
+    restored = json.loads(output.read_text(encoding="utf-8"))
+
+    assert restored["source"]["sha256"] == source_hash
+    assert restored["frames"][0]["slide_ref"] == package["frames"][0]["slide_ref"]
+
+
+def test_frame_dedup_requires_identical_pixels_and_preserves_ocr(tmp_path):
+    frame_dir = tmp_path / "frames"
+    frame_dir.mkdir()
+    first = Image.new("RGB", (24, 16), (20, 80, 140))
+    changed = first.copy()
+    changed.putpixel((0, 0), (21, 80, 140))
+    first.save(frame_dir / "one.png")
+    changed.save(frame_dir / "two.png")
+    first.save(frame_dir / "three.png")
+    package = {
+        "id": "rec_pixels",
+        "source": {"file": "meeting.mp4", "sha256": "d" * 64, "duration_s": 3, "size_bytes": 100},
+        "segments": [],
+        "frames": [
+            {"id": "one", "t": 0, "file": "frames/one.png", "ocr_text": "first text"},
+            {"id": "two", "t": 1, "file": "frames/two.png", "ocr_text": "changed image text"},
+            {"id": "three", "t": 2, "file": "frames/three.png", "ocr_text": "same image, other text"},
+        ],
+    }
+    package_path = tmp_path / "package.json"
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    kp = tmp_path / "pixels.kp"
+    report = pack(package_path, kp)
+    output = unpack(kp, tmp_path / "unpacked")
+    restored = json.loads(output.read_text(encoding="utf-8"))
+    frames = restored["frames"]
+
+    assert report.dedup_bytes > 0
+    assert frames[0]["file"] != frames[1]["file"]
+    assert frames[0]["file"] == frames[2]["file"]
+    assert [frame["ocr_text"] for frame in frames] == [
+        "first text", "changed image text", "same image, other text",
+    ]
+    with Image.open(tmp_path / "unpacked" / frames[0]["file"]) as first_image:
+        first_pixels = first_image.convert("RGBA").tobytes()
+    with Image.open(tmp_path / "unpacked" / frames[1]["file"]) as changed_image:
+        changed_pixels = changed_image.convert("RGBA").tobytes()
+    assert first_pixels != changed_pixels
+
+
+def test_embedded_zstd_dictionary_decodes_without_sidecar(tmp_path):
+    import pytest
+    zstd = pytest.importorskip("zstandard")
+
+    from src.savings.pack import MAGIC, _decode
+
+    dictionary_bytes = b"a useful transcript dictionary with repeated recording words"
+    dictionary = zstd.ZstdCompressionDict(dictionary_bytes)
+    raw = b"repeated recording words in a transcript " * 20
+    compressed = zstd.ZstdCompressor(dict_data=dictionary).compress(raw)
+    payload = b"KPD1" + len(dictionary_bytes).to_bytes(4, "big") + dictionary_bytes + compressed
+    kp = tmp_path / "embedded-dictionary.kp"
+    kp.write_bytes(MAGIC + b"Y" + payload)
+
+    codec, decoded = _decode(kp)
+    assert codec == "zstd-dict"
+    assert decoded == raw
+
+
+def test_empty_and_missing_speakers_roundtrip_distinctly(tmp_path):
+    package = {
+        "id": "rec_speakers",
+        "source": {"file": "meeting.mp4", "sha256": "e" * 64, "duration_s": 2, "size_bytes": 100},
+        "segments": [
+            {"start": 0, "end": 1, "speaker": "", "text": "empty label"},
+            {"start": 1, "end": 2, "speaker": None, "text": "no label"},
+        ],
+        "frames": [],
+    }
+    package_path = tmp_path / "package.json"
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    kp = tmp_path / "speakers.kp"
+    pack(package_path, kp)
+    output = unpack(kp, tmp_path / "unpacked")
+    restored = json.loads(output.read_text(encoding="utf-8"))
+
+    assert [segment["speaker"] for segment in restored["segments"]] == ["", None]
+
+
+def test_pack_rejects_unsafe_or_duplicate_frame_ids(tmp_path):
+    package = {
+        "id": "rec_bad_ids",
+        "source": {"file": "meeting.mp4", "sha256": "f" * 64, "duration_s": 1, "size_bytes": 1},
+        "segments": [],
+        "frames": [{"id": "../escape", "t": 0, "file": "unused", "slide_ref": {"doc_id": "DOC", "slide_no": 1}}],
+    }
+    package_path = tmp_path / "package.json"
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    with pytest.raises(ValueError, match="Unsafe frame id"):
+        pack(package_path, tmp_path / "unsafe.kp")
+
+    package["frames"] = [
+        {"id": "same", "t": 0, "file": "unused", "slide_ref": {"doc_id": "DOC", "slide_no": 1}},
+        {"id": "same", "t": 1, "file": "unused", "slide_ref": {"doc_id": "DOC", "slide_no": 2}},
+    ]
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+    with pytest.raises(ValueError, match="Duplicate frame id"):
+        pack(package_path, tmp_path / "duplicate.kp")

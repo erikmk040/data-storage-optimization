@@ -3,6 +3,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import streamlit as st
+
+st.set_page_config(page_title="Ericsson Knowledge Compression", page_icon="⚡", layout="wide")
 from src.search.index import index_package
 from src.search.make_mock import make
 from src.search.query import search
@@ -56,18 +58,18 @@ def format_bytes(value: int | float) -> str:
     return f"{value:.1f} TB"
 
 
-st.set_page_config(page_title="Ericsson Knowledge Compression", page_icon="⚡", layout="wide")
 st.title("Ericsson Knowledge Compression")
 st.caption("Turn heavy recordings into compact, searchable knowledge packages.")
 
 if storage:
     st.subheader("Storage impact")
     metric_columns = st.columns(4)
-    metric_columns[0].metric("Original recording", format_bytes(storage["original_bytes"]))
+    metric_columns[0].metric("Illustrative source size", format_bytes(storage["original_bytes"]))
     metric_columns[1].metric("Compact package", format_bytes(storage["compact_bytes"]))
-    metric_columns[2].metric("Storage saved", format_bytes(storage["saved_bytes"]))
-    metric_columns[3].metric("Reduction", f"{storage['saved_percent']:.2f}%")
-    st.progress(min(storage["saved_percent"] / 100, 1.0), text="Information retained · storage removed")
+    metric_columns[2].metric("Illustrative difference", format_bytes(storage["saved_bytes"]))
+    metric_columns[3].metric("Illustrative reduction", f"{storage['saved_percent']:.2f}%")
+    st.progress(min(storage["saved_percent"] / 100, 1.0), text="Mock estimate · not a measured video compression result")
+    st.caption("The demo has no source video; its source size is mock metadata. Use a real recording package for measured savings.")
 
     impact_left, impact_right = st.columns([1, 1])
     with impact_left:
@@ -152,23 +154,3 @@ with story_tab:
         pipeline work for one recording or an enterprise library.
         """
     )
-
-q = st.text_input("Search for a topic", placeholder="e.g. duplicate files")
-if q:
-    results = search(q)
-    st.caption(f"{len(results)} hits")
-    for r in results:
-        c1, c2 = st.columns([1, 2])
-        fr = r["frame"]
-        with c1:
-            if fr and Path(fr["file"]).exists():
-                st.image(fr["file"])
-            else:
-                st.info("No frame")
-        with c2:
-            mm, ss = divmod(int(r["start"]), 60)
-            st.markdown(f"**{r['rec_id']}** · {mm:02d}:{ss:02d} · {r['speaker'] or '-'} · _{r['kind']}_")
-            st.write(r["snippet"].replace("[", "**").replace("]", "**"))
-            if fr and fr.get("doc_id"):
-                st.caption(f"Slide {fr['slide_no']} in {fr['doc_id']}")
-        st.divider()
