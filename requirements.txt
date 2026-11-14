@@ -13,3 +13,7 @@ fastapi
 uvicorn
 sentence-transformers
 pytest
+brotli
+zstandard
+py7zr
+scikit-image
