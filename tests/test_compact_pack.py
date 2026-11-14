@@ -90,6 +90,26 @@ def test_unpacked_package_can_be_indexed_and_searched(tmp_path, monkeypatch):
     assert results[0]["text"] == "Unicode åäö | stays exact"
 
 
+def test_index_and_search_support_an_explicit_database(tmp_path):
+    package_path, _ = _package(tmp_path)
+    kp = tmp_path / "recording.kp"
+    pack(package_path, kp)
+    output = tmp_path / "indexed-explicit"
+    unpack(kp, output)
+
+    from src.search.index import index_package
+    from src.search.query import search
+
+    database = tmp_path / "uploaded-session.db"
+    index_package(output / "package.json", db_path=database)
+    results = search("Unicode", db_path=database)
+
+    assert results
+    assert results[0]["rec_id"] == "rec_compact"
+    index_package(output / "package.json", db_path=database)
+    assert search("Unicode", db_path=database) == results
+
+
 def test_identical_frames_are_referenced(tmp_path):
     package_path, package = _package(tmp_path)
     from PIL import Image
@@ -228,3 +248,37 @@ def test_pack_rejects_unsafe_or_duplicate_frame_ids(tmp_path):
     package_path.write_text(json.dumps(package), encoding="utf-8")
     with pytest.raises(ValueError, match="Duplicate frame id"):
         pack(package_path, tmp_path / "duplicate.kp")
+
+
+def test_pixel_verification_detects_rgb_changes_with_unchanged_alpha():
+    from src.savings.pack import _image_pixels_equal
+
+    original = Image.new("RGBA", (8, 8), (20, 80, 140, 255))
+    changed = original.copy()
+    changed.putpixel((0, 0), (21, 80, 140, 255))
+    assert _image_pixels_equal(original, original.copy())
+    assert not _image_pixels_equal(original, changed)
+
+
+@pytest.mark.parametrize("failed_check", ["ssim", "ocr"])
+def test_lossy_candidate_rejected_when_fidelity_check_fails(tmp_path, monkeypatch, failed_check):
+    pytesseract = pytest.importorskip("pytesseract")
+    metrics = pytest.importorskip("skimage.metrics")
+    from src.savings.pack import _lossless_webp, _verified_lossy
+
+    source, target = tmp_path / "source.png", tmp_path / "lossless.webp"
+    Image.effect_noise((96, 96), 40).convert("RGB").save(source)
+    _lossless_webp(source, target)
+    original_bytes = target.read_bytes()
+    calls = 0
+
+    def read_ocr(image):
+        nonlocal calls
+        calls += 1
+        return "source text" if calls == 1 or failed_check != "ocr" else "changed text"
+
+    monkeypatch.setattr(pytesseract, "image_to_string", read_ocr)
+    monkeypatch.setattr(metrics, "structural_similarity", lambda *a, **k: 0.98 if failed_check == "ssim" else 1.0)
+    assert _verified_lossy(source, target, "source text") == target
+    assert target.read_bytes() == original_bytes
+    assert not target.with_name("lossless.lossy.webp").exists()

@@ -5,7 +5,7 @@ pymupdf
 python-pptx
 imagehash
 Pillow
-opencv-python
+opencv-python-headless
 pytesseract
 numpy
 streamlit
