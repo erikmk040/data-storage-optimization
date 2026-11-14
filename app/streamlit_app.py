@@ -322,11 +322,44 @@ def compress_uploaded_video(name: str, data: bytes) -> dict[str, Any]:
         package_dir = root / "package"
         kp_path = root / "recording.kp"
         source.write_bytes(data)
-        package_json = build_package(source, package_dir, transcribe_audio=True)
+        try:
+            package_json = build_package(source, package_dir, transcribe_audio=True)
+        except RuntimeError as error:
+            # FFmpeg 9 rejects MJPEG extraction from limited-range YUV even
+            # though older FFmpeg releases accepted it. Retry through a
+            # lossless, full-range compatibility intermediate while retaining
+            # the uploaded file's identity in the package manifest below.
+            if "Non full-range YUV is non-standard" not in str(error):
+                raise
+            normalized = root / "ffmpeg-compatible.mkv"
+            subprocess.run(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-i", str(source), "-vf", "format=yuvj420p",
+                    "-color_range", "pc", "-c:v", "libx264",
+                    "-preset", "ultrafast", "-crf", "0", "-c:a", "copy",
+                    str(normalized),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=300,
+            )
+            package_json = build_package(
+                normalized, package_dir, transcribe_audio=True
+            )
+        package = json.loads(package_json.read_text(encoding="utf-8"))
+        package["source"].update(
+            file=name,
+            sha256=source_hash,
+            size_bytes=len(data),
+        )
+        package_json.write_text(
+            json.dumps(package, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         report = pack(package_json, kp_path)
         search_db = root / "index.db"
         index_package(package_json, db_path=search_db)
-        package = json.loads(package_json.read_text(encoding="utf-8"))
         compressed = kp_path.stat().st_size
         return {
             "file": name,
