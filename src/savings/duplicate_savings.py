@@ -1,22 +1,12 @@
 
-import hashlib
 from pathlib import Path
+
+from src.documents.file_hash import find_duplicate_groups, hash_file
 
 
 def calculate_file_hash(file_path: str | Path) -> str:
-    """Calculate the SHA-256 hash of a file."""
-    file_path = Path(file_path)
-
-    if not file_path.is_file():
-        raise FileNotFoundError(f"File not found: {file_path}")
-
-    sha256 = hashlib.sha256()
-
-    with file_path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            sha256.update(chunk)
-
-    return sha256.hexdigest()
+    """Compatibility wrapper around the shared file hash implementation."""
+    return hash_file(file_path)
 
 
 def find_duplicates(directory: str | Path) -> dict[str, list[str]]:
@@ -29,21 +19,11 @@ def find_duplicates(directory: str | Path) -> dict[str, list[str]]:
     if not directory.is_dir():
         raise NotADirectoryError(f"Not a directory: {directory}")
 
-    files_by_hash = {}
-
-    for file_path in sorted(directory.rglob("*")):
-        if not file_path.is_file():
-            continue
-
-        file_hash = calculate_file_hash(file_path)
-
-        files_by_hash.setdefault(file_hash, []).append(str(file_path))
-
-    return {
-        file_hash: file_paths
-        for file_hash, file_paths in files_by_hash.items()
-        if len(file_paths) > 1
-    }
+    files_by_hash = find_duplicate_groups(
+        file_path for file_path in sorted(directory.rglob("*")) if file_path.is_file()
+    )
+    return {file_hash: [str(path) for path in paths]
+            for file_hash, paths in files_by_hash.items()}
 
 
 def calculate_duplicate_savings(

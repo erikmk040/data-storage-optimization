@@ -23,11 +23,11 @@ def hash_file(path: str | Path, chunk_size: int = CHUNK_SIZE) -> str:
     return digest.hexdigest()
 
 
-def find_duplicates(paths: Iterable[str | Path]) -> list[list[Path]]:
-    """Return groups of distinct file paths with identical SHA-256 digests.
+def find_duplicate_groups(paths: Iterable[str | Path]) -> dict[str, list[Path]]:
+    """Group distinct paths by SHA-256 digest, preserving input order.
 
-    Input order is preserved. Repeated paths (including relative/absolute
-    aliases) count once. File access errors propagate to the caller.
+    Repeated paths (including relative/absolute aliases) count once. File
+    access errors propagate to the caller.
     """
     groups: dict[str, list[Path]] = {}
     seen: set[Path] = set()
@@ -38,7 +38,12 @@ def find_duplicates(paths: Iterable[str | Path]) -> list[list[Path]]:
             continue
         seen.add(resolved)
         groups.setdefault(hash_file(path), []).append(path)
-    return [group for group in groups.values() if len(group) > 1]
+    return {digest: group for digest, group in groups.items() if len(group) > 1}
+
+
+def find_duplicates(paths: Iterable[str | Path]) -> list[list[Path]]:
+    """Return groups of distinct file paths with identical SHA-256 digests."""
+    return list(find_duplicate_groups(paths).values())
 
 
 def main(argv: list[str] | None = None) -> int:
