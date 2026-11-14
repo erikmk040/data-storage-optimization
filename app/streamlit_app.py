@@ -3,7 +3,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import streamlit as st
-from src.search.db import connect
 from src.search.index import index_package
 from src.search.make_mock import make
 from src.search.query import search
@@ -13,14 +12,10 @@ from src.savings.pack import pack
 def ensure_demo_index() -> str:
     """Create a small portable demo index when running on a fresh host."""
     package_path = Path("data/sample/rec_mock/package.json")
-    if not package_path.is_file():
-        make(package_path.parent)
-    with connect() as connection:
-        exists = connection.execute(
-            "SELECT 1 FROM recordings WHERE id=?", ("rec_mock",)
-        ).fetchone()
-    if exists is None:
-        index_package(package_path)
+    # Rebuild the tiny demo deterministically so a persistent cloud volume
+    # cannot keep an older package or stale FTS rows after an app update.
+    make(package_path.parent)
+    index_package(package_path)
     return str(package_path)
 
 
