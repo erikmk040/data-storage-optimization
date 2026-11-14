@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -86,66 +88,81 @@ def extract_keyframes(
     scene_threshold: float = 0.35,
     fallback_interval_s: int = 30,
 ) -> list[dict[str, Any]]:
-    """Extract scene-change frames and return contract-compatible frame records.
+    """Extract scene changes plus periodic context frames.
 
-    If a video has no detectable scene changes, a regular fallback interval keeps
-    the package useful for recordings with a mostly static screen.
+    Scene detection alone is insufficient for long recordings with a static
+    camera view: many transcript segments would otherwise point to one frame.
+    Periodic frames provide time coverage, while perceptual-hash deduplication
+    prevents identical frames from inflating the package.
     """
+    if fallback_interval_s <= 0:
+        raise ValueError("fallback_interval_s must be positive")
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Some Homebrew FFmpeg builds do not include the WebP encoder. JPEG is
-    # widely available and remains compatible with the recording contract.
-    pattern = output_dir / "f_%05d.jpg"
-    result = _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(video_path),
-            "-vf",
-            f"select='eq(n,0)+gt(scene,{scene_threshold})',showinfo",
-            "-fps_mode",
-            "vfr",
-            "-q:v",
-            "5",
-            str(pattern),
-        ]
-    )
-    times = _frame_times(result.stderr)
-    frame_paths = sorted(output_dir.glob("f_*.jpg"))
+    for old_frame in output_dir.glob("f_*.jpg"):
+        old_frame.unlink()
 
-    if not frame_paths:
-        result = _run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(video_path),
-                "-vf",
-                f"fps=1/{fallback_interval_s}",
-                "-q:v",
-                "5",
-                str(pattern),
-            ]
-        )
-        del result
-        frame_paths = sorted(output_dir.glob("f_*.jpg"))
-        times = [index * fallback_interval_s for index in range(len(frame_paths))]
+    with tempfile.TemporaryDirectory(prefix="recording-frames-") as directory:
+        temporary = Path(directory)
+        scene_dir = temporary / "scene"
+        periodic_dir = temporary / "periodic"
+        scene_dir.mkdir()
+        periodic_dir.mkdir()
 
-    if len(times) != len(frame_paths):
-        # ffmpeg versions can omit showinfo lines; preserve the frames with a
-        # deterministic approximation rather than producing invalid records.
-        interval = fallback_interval_s
-        times = [index * interval for index in range(len(frame_paths))]
+        scene_result = _run([
+            "ffmpeg", "-y", "-i", str(video_path),
+            "-vf", f"select='eq(n,0)+gt(scene,{scene_threshold})',showinfo",
+            "-fps_mode", "vfr", "-q:v", "5", str(scene_dir / "s_%05d.jpg"),
+        ])
+        periodic_result = _run([
+            "ffmpeg", "-y", "-i", str(video_path),
+            "-vf", f"fps=1/{fallback_interval_s},showinfo",
+            "-fps_mode", "vfr", "-q:v", "5", str(periodic_dir / "p_%05d.jpg"),
+        ])
+
+        def candidates(directory: Path, stderr: str, prefix: str) -> list[tuple[float, Path, int]]:
+            paths = sorted(directory.glob(f"{prefix}_*.jpg"))
+            times = _frame_times(stderr)
+            if len(times) != len(paths):
+                times = [index * fallback_interval_s for index in range(len(paths))]
+            return [(time, path, 0 if prefix == "s" else 1) for path, time in zip(paths, times)]
+
+        all_candidates = candidates(scene_dir, scene_result.stderr, "s")
+        all_candidates += candidates(periodic_dir, periodic_result.stderr, "p")
+        all_candidates.sort(key=lambda item: (item[0], item[2]))
+
+        # Keep scene frames in preference to periodic frames at the same time,
+        # and remove visually identical frames before copying to the package.
+        kept: list[tuple[float, Path]] = []
+        hashes = []
+        try:
+            import imagehash
+            from PIL import Image
+        except ImportError:
+            imagehash = None
+
+        for time, path, _priority in all_candidates:
+            current_hash = None
+            if imagehash is not None:
+                with Image.open(path) as image:
+                    current_hash = imagehash.phash(image)
+            if current_hash is not None and any(int(current_hash - previous) <= 2 for previous in hashes):
+                continue
+            if current_hash is not None:
+                hashes.append(current_hash)
+            kept.append((time, path))
+
+        for index, (_time, path) in enumerate(kept, 1):
+            shutil.copyfile(path, output_dir / f"f_{index:05d}.jpg")
 
     return [
         {
             "id": f"f_{index:03d}",
             "t": round(time, 3),
-            "file": f"frames/{path.name}",
+            "file": f"frames/f_{index:05d}.jpg",
             "phash": None,
             "ocr_text": "",
         }
-        for index, (path, time) in enumerate(zip(frame_paths, times), 1)
+        for index, (time, _path) in enumerate(kept, 1)
     ]
 
 
@@ -173,10 +190,12 @@ def transcribe(video_path: Path, model_name: str = "base") -> list[dict[str, Any
 
 
 def _frame_for_time(frames: list[dict[str, Any]], time: float) -> str | None:
-    candidates = [frame for frame in frames if frame["t"] <= time]
-    if not candidates:
-        return frames[0]["id"] if frames else None
-    return max(candidates, key=lambda frame: frame["t"])["id"]
+    if not frames:
+        return None
+    return min(
+        frames,
+        key=lambda frame: (abs(frame["t"] - time), frame["t"] > time),
+    )["id"]
 
 
 def build_package(

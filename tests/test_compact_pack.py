@@ -89,6 +89,24 @@ def test_unpacked_package_can_be_indexed_and_searched(tmp_path, monkeypatch):
     assert results[0]["text"] == "Unicode åäö | stays exact"
 
 
+def test_index_and_search_support_an_explicit_database(tmp_path):
+    package_path, _ = _package(tmp_path)
+    kp = tmp_path / "recording.kp"
+    pack(package_path, kp)
+    output = tmp_path / "indexed-explicit"
+    unpack(kp, output)
+
+    from src.search.index import index_package
+    from src.search.query import search
+
+    database = tmp_path / "uploaded-session.db"
+    index_package(output / "package.json", db_path=database)
+    results = search("Unicode", db_path=database)
+
+    assert results
+    assert results[0]["rec_id"] == "rec_compact"
+
+
 def test_near_duplicate_frames_are_referenced(tmp_path):
     package_path, package = _package(tmp_path)
     from PIL import Image
