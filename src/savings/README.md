@@ -2,8 +2,9 @@
 
 `python -m src.savings.pack <package.json> <out.kp>` creates one deterministic
 KP v2 archive. The packer preserves transcript text as UTF-8, rounds only
-timestamps, stores slide-registry matches as references, and verifies encoded
-images before accepting them. A lossy image is accepted only after OCR and SSIM
+timestamps, stores slide-registry matches as references, and deduplicates
+frames only when their normalized pixels are identical. Encoded images are
+verified before acceptance. A lossy image is accepted only after OCR and SSIM
 checks; otherwise lossless WebP is used.
 
 ## What is not preserved
@@ -15,6 +16,9 @@ checks; otherwise lossless WebP is used.
   document is required to render it.
 - The optional `--voice` flag records the intent in the manifest, but cannot
   create voice samples unless voice data is present in the input package.
+
+KP files embed any zstandard dictionary used by the selected codec, so they can
+be unpacked without the original training dictionary.
 
 The 100 KB target is measurable for mock/reference-heavy packages, not a
 mathematical guarantee for arbitrary recordings. Lossless preservation can
