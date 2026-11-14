@@ -4,11 +4,11 @@ The same script is embedded as speaker notes in the presentation.
 
 ## Slide 1 — 0:00–0:30
 
-The brief creates a real tension for three users. Storage owners see large files and copies grow. Knowledge workers cannot find one answer without replaying content. Offboarding teams cannot safely delete a file unless another accessible copy is proven. The causes are full-fidelity media, duplication and information that is not indexed. The symptom is expensive retention or lost knowledge. Can we keep what matters without keeping every byte?
+The brief creates a real tension for four users. Storage owners see large files and copies grow. Knowledge workers cannot find one answer without replaying content. Offboarding teams cannot safely delete a file unless another accessible copy is proven. AI and data teams cannot activate information trapped in media. The causes are full-fidelity media, duplication and information that is not indexed. Can we keep what matters without keeping every byte?
 
 ## Slide 2 — 0:30–1:00
 
-We tested the idea on a real six-minute video. The 88,654,139-byte source became a 1,202,334-byte knowledge package: 98.64 percent less storage. It still contains 33 searchable transcript segments and 16 representative frames. This is measured, not projected. Semantic mode does not preserve original audio or every motion frame. Exact mode is available when byte-for-byte recovery matters, but cannot give this reduction.
+We tested the idea on a real six-minute video. The 88,654,139-byte source became a 1,202,334-byte knowledge package: 98.64 percent less storage. It still contains 33 searchable transcript segments and 16 representative frames. This is verified local benchmark evidence; the source is not distributed in the repository. For a clean-clone control, exact mode reduces the tracked challenge document from 285,883 to 275,774 bytes, or 3.54 percent, and restores it byte-for-byte. Semantic mode does not preserve original audio or every motion frame.
 
 ## Slide 3 — 1:00–1:30
 
@@ -20,9 +20,9 @@ The website is only the demo client. The product is the Python core and versione
 
 ## Slide 5 — 1:55–2:30 — live demo
 
-Open the demo and show the prepared real-video result: **88.7 MB → 1.20 MB → 98.64% reduction**. Search for `winner` and show transcript plus actual frames. Say that **44 tests pass** and the full upload was verified. Do not transcribe on stage. If the live demo fails, use the measured backup on the slide.
+If the prepared local artifact is available, show **88.7 MB → 1.20 MB → 98.64% reduction**. Otherwise say that the clean demo uses deterministic mock search and use the benchmark-evidence slide. Search for `winner` and show transcript plus visual context. Say that the automated release suite covers exact restoration, semantic search and the API contract. Do not transcribe on stage.
 
-If the live demo fails, use the verified result printed on the slide.
+If the live demo fails, use the clearly labelled local benchmark evidence printed on the slide.
 
 ## Slide 6 — 2:30–3:00
 

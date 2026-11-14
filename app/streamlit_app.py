@@ -12,6 +12,7 @@ import tempfile
 from typing import Any
 
 import streamlit as st
+from app.evidence import load_benchmark_evidence
 from app.integration import build_exact_artifact
 from app.pdf_semantic import package_pdf_semantic, read_semantic_pdf_graph
 from app.pptx_semantic import package_pptx_semantic, read_semantic_pptx_graph
@@ -39,7 +40,12 @@ def ensure_demo_index() -> str:
     index_package(package_path)
     jury_package = Path("data/sample/jury_prizes/package.json")
     if jury_package.is_file():
-        index_package(jury_package)
+        try:
+            index_package(jury_package)
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            # Optional local evidence must never prevent the clean demo index
+            # from starting. Its integrity is validated separately below.
+            pass
     return str(package_path)
 
 
@@ -71,29 +77,31 @@ def load_search_frame(path: str, modified_ns: int) -> bytes:
 
 @st.cache_data
 def prepared_jury_measurement() -> dict[str, Any] | None:
-    """Return recorded source metrics and the local prepared package size."""
-    package_json = Path("data/sample/jury_prizes/package.json")
-    kp_path = package_json.with_name("package.kp")
-    if not package_json.is_file() or not kp_path.is_file():
+    """Return the optional local artifact only when it matches release evidence."""
+    try:
+        evidence = load_benchmark_evidence(verify_local_files=True)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
         return None
-    package = json.loads(package_json.read_text(encoding="utf-8"))
-    original = int(package["source"]["size_bytes"])
-    compact = kp_path.stat().st_size
-    saved, saved_percent = measured_savings(original, compact)
+    kp_path = Path(evidence["local_paths"]["package"])
+    if not evidence["local_files_verified"]:
+        return None
+    source = evidence["source"]
+    package = evidence["package"]
+    content = evidence["content"]
     return {
-        "file": package["source"]["file"],
-        "original_bytes": original,
-        "compressed_bytes": compact,
-        "saved_bytes": saved,
-        "saved_percent": saved_percent,
-        "sha256": package["source"]["sha256"][:16],
+        "file": source["file"],
+        "original_bytes": source["bytes"],
+        "compressed_bytes": package["bytes"],
+        "saved_bytes": evidence["saved_bytes"],
+        "saved_percent": evidence["saved_percent"],
+        "sha256": source["sha256"][:16],
         "kp_path": str(kp_path.resolve()),
         "facts": {
             "mode": "prepared semantic video demo",
-            "duration": f"{float(package['source']['duration_s']):.1f} s",
-            "transcript segments": len(package.get("segments", [])),
-            "unique frames": len(package.get("frames", [])),
-            "source SHA-256": package["source"]["sha256"],
+            "duration": f"{float(source['duration_seconds']):.1f} s",
+            "transcript segments": content["transcript_segments"],
+            "unique frames": content["representative_frames"],
+            "source SHA-256": source["sha256"],
         },
     }
 
@@ -258,12 +266,55 @@ def inspect_uploaded_file(name: str, data: bytes) -> dict[str, Any]:
         "sha256": hashlib.sha256(data).hexdigest()[:16],
         "kp_bytes": artifact.payload,
         "candidate_bytes": {},
+        "component_kind": "exact",
+        "components": {
+            **artifact.component_bytes,
+            "final": artifact.package_bytes,
+        },
         "facts": facts,
     }
 
 
 def compress_uploaded_video(name: str, data: bytes) -> dict[str, Any]:
     """Run and retain the real video-to-KP pipeline for one uploaded video."""
+    source_hash = hashlib.sha256(data).hexdigest()
+    try:
+        evidence = load_benchmark_evidence(verify_local_files=True)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        evidence = None
+    evidence_source = evidence["source"] if evidence else None
+    if (
+        evidence
+        and evidence["local_files_verified"]
+        and len(data) == evidence_source["bytes"]
+        and source_hash == evidence_source["sha256"]
+    ):
+        package_json = Path(evidence["local_paths"]["metadata"])
+        kp_path = Path(evidence["local_paths"]["package"])
+        package = json.loads(package_json.read_text(encoding="utf-8"))
+        return {
+            "file": name,
+            "original_bytes": len(data),
+            "compressed_bytes": evidence["package"]["bytes"],
+            "saved_bytes": evidence["saved_bytes"],
+            "saved_percent": evidence["saved_percent"],
+            "codec": f"KP v2/{evidence['package']['codec']}",
+            "sha256": source_hash[:16],
+            "kp_path": str(kp_path.resolve()),
+            "component_kind": "video",
+            "facts": {
+                "mode": "semantic video compression · verified prepared artifact",
+                "segments": len(package.get("segments", [])),
+                "unique frames": len(package.get("frames", [])),
+                "searchable": True,
+                "transcript": "UTF-8 text",
+                "source SHA-256": source_hash,
+                "package SHA-256": evidence["package"]["sha256"],
+                "prepared artifact reused": True,
+                "speaker diarization": False,
+            },
+        }
+
     suffix = Path(name).suffix.lower()
     root = Path(tempfile.mkdtemp(prefix="uploaded-recording-"))
     try:
@@ -271,11 +322,44 @@ def compress_uploaded_video(name: str, data: bytes) -> dict[str, Any]:
         package_dir = root / "package"
         kp_path = root / "recording.kp"
         source.write_bytes(data)
-        package_json = build_package(source, package_dir, transcribe_audio=True)
+        try:
+            package_json = build_package(source, package_dir, transcribe_audio=True)
+        except RuntimeError as error:
+            # FFmpeg 9 rejects MJPEG extraction from limited-range YUV even
+            # though older FFmpeg releases accepted it. Retry through a
+            # lossless, full-range compatibility intermediate while retaining
+            # the uploaded file's identity in the package manifest below.
+            if "Non full-range YUV is non-standard" not in str(error):
+                raise
+            normalized = root / "ffmpeg-compatible.mkv"
+            subprocess.run(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-i", str(source), "-vf", "format=yuvj420p",
+                    "-color_range", "pc", "-c:v", "libx264",
+                    "-preset", "ultrafast", "-crf", "0", "-c:a", "copy",
+                    str(normalized),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=300,
+            )
+            package_json = build_package(
+                normalized, package_dir, transcribe_audio=True
+            )
+        package = json.loads(package_json.read_text(encoding="utf-8"))
+        package["source"].update(
+            file=name,
+            sha256=source_hash,
+            size_bytes=len(data),
+        )
+        package_json.write_text(
+            json.dumps(package, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         report = pack(package_json, kp_path)
         search_db = root / "index.db"
         index_package(package_json, db_path=search_db)
-        package = json.loads(package_json.read_text(encoding="utf-8"))
         compressed = kp_path.stat().st_size
         return {
             "file": name,
@@ -287,13 +371,22 @@ def compress_uploaded_video(name: str, data: bytes) -> dict[str, Any]:
             "sha256": hashlib.sha256(data).hexdigest()[:16],
             "search_db": str(search_db),
             "kp_path": str(kp_path),
-            "components": report.component_bytes,
+            "component_kind": "video",
+            "components": {
+                **report.component_bytes,
+                "container_header": 4,
+                "final": compressed,
+            },
             "facts": {
                 "mode": "semantic video compression",
                 "segments": len(package.get("segments", [])),
                 "unique frames": len(package.get("frames", [])),
                 "searchable": True,
                 "transcript": "UTF-8 text",
+                "component accounting": (
+                    "Components are uncompressed archive inputs; whole-archive compression "
+                    "means they do not add up to the final KP bytes."
+                ),
             },
         }
     except Exception:
@@ -376,7 +469,9 @@ def compress_uploaded_pptx(name: str, data: bytes, *, include_media: bool) -> di
             "source_media": result.source_media_bytes,
             "optimized_media": result.optimized_media_bytes,
             "final": result.packed_bytes,
+            "container_header": 5,
         },
+        "component_kind": "pptx",
         "facts": {
             "mode": "semantic presentation compression",
             "fidelity": result.fidelity,
@@ -464,7 +559,9 @@ def compress_uploaded_pdf(name: str, data: bytes) -> dict[str, Any]:
             "source_media": result.indexed_asset_bytes,
             "optimized_media": 0,
             "final": result.packed_bytes,
+            "container_header": 6,
         },
+        "component_kind": "pdf",
         "facts": {
             "mode": "semantic PDF knowledge compression",
             "fidelity": graph["fidelity"],
@@ -563,6 +660,7 @@ with upload_tab:
         "Upload, choose the fidelity policy and compress. Every displayed byte and percentage is measured from the uploaded data."
     )
     prepared_demo = prepared_jury_measurement()
+    benchmark_evidence = load_benchmark_evidence()
     if prepared_demo:
         with st.container(border=True):
             st.markdown("#### Jury-safe real-video demo")
@@ -587,8 +685,7 @@ with upload_tab:
                 ),
             )
             st.caption(
-                "Source size and SHA-256 are recorded in the prepared package; its package size is read locally. "
-                "Search for **winner** to show its transcript and visual context."
+                "The package was re-hashed and its source metadata matches the evidence manifest. The original video is not distributed. Search for **winner** to show transcript and visual context."
             )
             st.download_button(
                 "Download prepared .kp package",
@@ -598,6 +695,13 @@ with upload_tab:
                 icon=":material/download:",
                 key="download_prepared_jury_package",
             )
+    else:
+        st.info(
+            "The optional real-video artifact is not bundled in a clean checkout. "
+            "The app remains fully demonstrable with deterministic mock search; the result slide is labelled local benchmark evidence.",
+            title="Clean-checkout demo mode",
+            icon=":material/cloud_done:",
+        )
     if st.session_state.get("upload_measurements"):
         st.button(
             "Clear processed session files",
@@ -616,12 +720,33 @@ with upload_tab:
             "Documents are processed in memory. Videos use an isolated temporary workspace. "
             "Session artifacts are not added to the repository."
         ),
-        key="file_uploads",
+        max_upload_size=200,
+        key="file_uploads_v2",
     )
     st.caption(
         "Demo upload limit: 200 MB per file. The production API streams video up to 10 GiB without loading the complete source into memory."
     )
     if uploads:
+        unique_uploads = []
+        seen_uploads: set[tuple[str, str]] = set()
+        duplicate_uploads = 0
+        for upload in uploads:
+            identity = (
+                upload.name,
+                hashlib.sha256(upload.getbuffer()).hexdigest(),
+            )
+            if identity in seen_uploads:
+                duplicate_uploads += 1
+                continue
+            seen_uploads.add(identity)
+            unique_uploads.append(upload)
+        uploads = unique_uploads
+        if duplicate_uploads:
+            st.info(
+                f"Ignored {duplicate_uploads} repeated selection(s) of the same file.",
+                title="Duplicate upload selection",
+                icon=":material/content_copy:",
+            )
         video_uploads = [
             upload for upload in uploads
             if Path(upload.name).suffix.lower() in VIDEO_SUFFIXES
@@ -639,6 +764,13 @@ with upload_tab:
                 help="This produces the actual challenge output. It can take several minutes for a long video.",
                 key="semantic_video_mode",
             )
+            if semantic_video:
+                st.warning(
+                    "Semantic video mode keeps transcript timing and representative keyframes; "
+                    "original audio and discarded motion cannot be reconstructed. Automatic speaker diarization is not implemented.",
+                    title="Semantic video changes the artifact",
+                    icon=":material/movie_edit:",
+                )
         if pptx_uploads:
             presentation_mode = st.segmented_control(
                 "PowerPoint quality policy",
@@ -657,6 +789,18 @@ with upload_tab:
                 help="ASCII is export-only and about 25% larger than the selected binary KP package.",
                 key="ascii_export",
             )
+            if presentation_mode != "Exact PowerPoint file":
+                media_statement = (
+                    "Pixel-identical embedded media is included."
+                    if presentation_mode == "Knowledge + lossless visuals"
+                    else "Embedded media pixels are omitted for maximum reduction."
+                )
+                st.warning(
+                    "Semantic PowerPoint mode keeps text, notes, shape geometry and relationships. "
+                    f"{media_statement} The editable original PowerPoint cannot be reconstructed.",
+                    title="Semantic PowerPoint changes the artifact",
+                    icon=":material/slideshow:",
+                )
         if pdf_uploads:
             pdf_mode = st.segmented_control(
                 "PDF quality policy",
@@ -843,34 +987,60 @@ with upload_tab:
                 hide_index=True,
                 alt="Compression results for uploaded files",
             )
-            for item in measurements:
+            for item_index, item in enumerate(measurements):
+                element_suffix = f"{item['sha256']}_{item_index}"
                 with st.expander(f"{item['file']} · SHA-256 {item['sha256']}"):
                     st.json(item["facts"])
                     if item.get("components"):
                         components = item["components"]
-                        if "graph" in components:
-                            if item.get("facts", {}).get("mode") == "semantic PDF knowledge compression":
+                        component_kind = item.get("component_kind")
+                        if component_kind in {"pdf", "pptx"}:
+                            if component_kind == "pdf":
                                 breakdown = [
+                                    {"Component": "Original file", "Bytes": item["original_bytes"]},
                                     {"Component": "Page knowledge graph", "Bytes": components["graph"]},
                                     {"Component": "Images referenced by hash", "Bytes": components["source_media"]},
                                     {"Component": "Image pixels stored", "Bytes": components["optimized_media"]},
+                                    {"Component": "Container header", "Bytes": components["container_header"]},
                                     {"Component": "Final KP package", "Bytes": components["final"]},
                                 ]
                             else:
                                 breakdown = [
+                                    {"Component": "Original file", "Bytes": item["original_bytes"]},
                                     {"Component": "Slide graph", "Bytes": components["graph"]},
                                     {"Component": "Original embedded media", "Bytes": components["source_media"]},
                                     {"Component": "Verified optimized media", "Bytes": components["optimized_media"]},
+                                    {"Component": "Container header", "Bytes": components["container_header"]},
                                     {"Component": "Final KP package", "Bytes": components["final"]},
                                 ]
-                        else:
+                        elif component_kind == "video":
                             breakdown = [
+                                {"Component": "Original video", "Bytes": item["original_bytes"]},
                                 {"Component": "Transcript and manifest", "Bytes": components.get("text", 0)},
                                 {"Component": "Unique frames", "Bytes": components.get("frames", 0)},
                                 {"Component": "Slide references", "Bytes": components.get("references", 0)},
                                 {"Component": "Deduplicated bytes", "Bytes": components.get("dedup_removed", 0)},
+                                {"Component": "Container header", "Bytes": components.get("container_header", 0)},
                                 {"Component": "Final KP output", "Bytes": item["compressed_bytes"]},
                             ]
+                        else:
+                            breakdown = [
+                                {"Component": "Original file", "Bytes": item["original_bytes"]},
+                                {"Component": "Compressed payload", "Bytes": components.get("compressed_payload", 0)},
+                                {"Component": "Integrity header", "Bytes": components.get("container_header", 0)},
+                                {"Component": "Final exact package", "Bytes": components.get("final", item["compressed_bytes"])},
+                            ]
+                        inner_components = {
+                            row["Component"]: row["Bytes"]
+                            for row in breakdown[1:-1]
+                        }
+                        largest_component = max(
+                            inner_components, key=inner_components.get, default="none"
+                        )
+                        st.caption(
+                            f"Largest reported component: **{largest_component}**. "
+                            "Semantic component inputs are measured before whole-package compression and are not additive to final bytes."
+                        )
                         st.bar_chart(
                             breakdown,
                             x="Component",
@@ -911,7 +1081,7 @@ with upload_tab:
                             data=Path(kp_path).read_bytes(),
                             file_name=f"{Path(item['file']).stem}.kp",
                             mime="application/octet-stream",
-                            key=f"download_{item['sha256']}",
+                            key=f"download_{element_suffix}",
                             icon=":material/download:",
                         )
                     kp_bytes = item.get("kp_bytes")
@@ -921,7 +1091,7 @@ with upload_tab:
                             data=kp_bytes,
                             file_name=f"{Path(item['file']).stem}.kp",
                             mime="application/vnd.ericsson.knowledge-package",
-                            key=f"download_package_{item['sha256']}",
+                            key=f"download_package_{element_suffix}",
                             icon=":material/download:",
                             width="stretch",
                         )
@@ -931,7 +1101,7 @@ with upload_tab:
                                 data=item["ascii_bytes"],
                                 file_name=f"{Path(item['file']).stem}.kp.txt",
                                 mime="text/plain",
-                                key=f"download_ascii_{item['sha256']}",
+                                key=f"download_ascii_{element_suffix}",
                                 icon=":material/code:",
                                 width="stretch",
                             )
@@ -1015,22 +1185,22 @@ with impact_tab:
         ratio = scenario_compact / max(scenario_original, 1)
         scenario_basis = "latest semantic video measurements"
     else:
-        scenario_options = ["Measured jury recording", "Planning assumption"]
+        scenario_options = ["Local benchmark evidence", "Planning assumption"]
         scenario_mode = st.segmented_control(
             "Scenario basis",
             scenario_options,
-            default=scenario_options[0] if prepared_demo else scenario_options[1],
+            default=scenario_options[0],
             key="storage_scenario_basis",
             help=(
-                "Use the measured ratio from the real jury recording, or enter an explicit "
+                "Use the recorded ratio from the local jury benchmark, or enter an explicit "
                 "planning assumption for another workload."
             ),
         )
-        if scenario_mode == "Measured jury recording" and prepared_demo:
-            ratio = prepared_demo["compressed_bytes"] / prepared_demo["original_bytes"]
+        if scenario_mode == "Local benchmark evidence":
+            ratio = benchmark_evidence["package"]["bytes"] / benchmark_evidence["source"]["bytes"]
             scenario_basis = (
-                "measured Jury and prizes.mp4 result: "
-                f"{format_percent(prepared_demo['saved_percent'])} reduction"
+                "verified local Jury and prizes.mp4 benchmark evidence: "
+                f"{format_percent(benchmark_evidence['saved_percent'])} reduction; source not distributed"
             )
         else:
             retained_percent = st.number_input(
@@ -1116,8 +1286,14 @@ with coverage_tab:
             },
             {
                 "Pitch requirement": "3 · Scenario savings",
-                "What we present": "98.64% measured reduction on Jury and prizes.mp4, then scaled transparently",
-                "Demo proof": "88,654,139 B → 1,202,334 B plus the storage calculator",
+                "What we present": (
+                    f"{benchmark_evidence['saved_percent']:.2f}% local benchmark evidence "
+                    f"on {benchmark_evidence['source']['file']}, then scaled transparently"
+                ),
+                "Demo proof": (
+                    f"{benchmark_evidence['source']['bytes']:,} B → "
+                    f"{benchmark_evidence['package']['bytes']:,} B plus the storage calculator"
+                ),
             },
             {
                 "Pitch requirement": "4 · Future-proof data strategy",
@@ -1164,7 +1340,7 @@ with coverage_tab:
     st.dataframe(
         [
             {
-                "Criterion": "Problem understanding · 20%",
+                "Criterion": "Problem understanding · 15%",
                 "Evidence to show": "Storage owners face heavy copies; knowledge workers cannot find answers; offboarding teams need safe deletion evidence",
                 "Honest boundary": "The brief and prototype files support the scope; Ericsson-wide prevalence is not yet measured",
             },
@@ -1174,8 +1350,8 @@ with coverage_tab:
                 "Honest boundary": "Ericsson authentication, connectors and operational ownership remain",
             },
             {
-                "Criterion": "Technical quality · 15%",
-                "Evidence to show": "88.7 MB upload passed, 98.64% measured reduction, search returns frames, 44 tests pass",
+                "Criterion": "Technical quality · 5%",
+                "Evidence to show": "Verified package/hash evidence, search returns frames, API and release tests pass",
                 "Honest boundary": "Semantic mode cannot reconstruct discarded motion or audio",
             },
             {
@@ -1189,7 +1365,7 @@ with coverage_tab:
                 "Honest boundary": "The codecs and extraction tools are standard; the adapted combination is the contribution",
             },
             {
-                "Criterion": "Presentation and demo · 10%",
+                "Criterion": "Presentation and demo · 25%",
                 "Evidence to show": "Prepared real-video result, winner search with images and a verified static backup",
                 "Honest boundary": "Keep the live path to two actions and finish within three minutes",
             },
@@ -1252,7 +1428,7 @@ with coverage_tab:
 with story_tab:
     st.subheader("Final pitch structure · three minutes", icon=":material/record_voice_over:")
     st.markdown(
-        """
+        f"""
         **0:00–0:30 · Use cases and problem**
         Valuable recordings and documents are expensive to keep but costly to lose. We address
         video distillation, searchable knowledge, duplicate detection and safer offboarding decisions.
@@ -1263,7 +1439,10 @@ with story_tab:
         versioned Python and REST/OpenAPI boundary.
 
         **1:15–2:00 · Measured result and demo**
-        `Jury and prizes.mp4` is reduced from 88,654,139 bytes to 1,202,334 bytes — **98.64% less**.
+        Local benchmark evidence records `{benchmark_evidence['source']['file']}` from
+        {benchmark_evidence['source']['bytes']:,} bytes to {benchmark_evidence['package']['bytes']:,}
+        bytes — **{benchmark_evidence['saved_percent']:.2f}% less**; the source is not distributed
+        in the repository.
         Search for `winner` to return the transcript together with its visual context, then scale the
         measured ratio in the storage calculator.
 

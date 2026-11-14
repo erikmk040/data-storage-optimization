@@ -46,6 +46,7 @@ app = FastAPI(
 
 
 def _package_response(artifact: KnowledgeArtifact) -> Response:
+    metadata = artifact.metadata()
     headers = {
         "Content-Disposition": (
             f'attachment; filename="{artifact.kind}-{artifact.source_sha256[:16]}.kp"'
@@ -55,8 +56,20 @@ def _package_response(artifact: KnowledgeArtifact) -> Response:
         "X-KP-Codec": artifact.codec,
         "X-KP-Original-Bytes": str(artifact.original_bytes),
         "X-KP-Package-Bytes": str(artifact.package_bytes),
+        "X-KP-Saved-Bytes": str(artifact.saved_bytes),
         "X-KP-Saved-Percent": f"{artifact.saved_percent:.6f}",
         "X-KP-Units": str(artifact.units),
+        "X-KP-Fidelity": artifact.fidelity,
+        "X-KP-Reversible": str(artifact.reversible).lower(),
+        "X-KP-Searchable": str(artifact.searchable).lower(),
+        "X-KP-AI-Ready": str(artifact.ai_ready).lower(),
+        "X-KP-Transcript-Bytes": str(metadata["transcript_bytes"]),
+        "X-KP-Graph-Manifest-Bytes": str(metadata["graph_manifest_bytes"]),
+        "X-KP-Reference-Bytes": str(metadata["reference_bytes"]),
+        "X-KP-Unique-Visual-Bytes": str(metadata["unique_visual_bytes"]),
+        "X-KP-Deduplicated-Bytes": str(metadata["deduplicated_bytes"]),
+        "X-KP-Archive-Header-Overhead": str(metadata["archive_header_overhead"]),
+        "X-KP-Largest-Component": str(metadata["largest_component"]),
     }
     return Response(
         content=artifact.payload,
@@ -105,6 +118,11 @@ def capabilities() -> dict[str, object]:
                 "preserves": ["transcript timeline", "representative keyframes", "source hash"],
                 "does_not_preserve": ["discarded motion", "original audio"],
             },
+        },
+        "package_search": {
+            "endpoint": "POST /v1/search",
+            "supported_formats": ["pdf", "pptx"],
+            "video": "index KP2 with src.search before querying; direct KP2 search is not implemented",
         },
         "integration": ["Python library", "REST/OpenAPI", "object-storage compatible bytes"],
     }

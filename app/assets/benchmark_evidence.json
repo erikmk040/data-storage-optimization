@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "evidence_id": "jury-prizes-local-2026-11-14",
+  "status": "verified local benchmark evidence",
+  "distribution": "source and package are intentionally not distributed in the repository",
+  "source": {
+    "file": "Jury and prizes.mp4",
+    "bytes": 88654139,
+    "sha256": "db6408087253d62fb454441192425c3bde4a65a58d17dfa0a7394ab38b000e72",
+    "duration_seconds": 362.9375
+  },
+  "package": {
+    "file": "package.kp",
+    "bytes": 1202334,
+    "sha256": "27c02aad585971dc7636d5ef541684067e4d39b9994c9ef939f51b4fe09a0660",
+    "format": "KP2",
+    "codec": "brotli"
+  },
+  "content": {
+    "transcript_segments": 33,
+    "representative_frames": 16,
+    "speaker_diarization": false
+  },
+  "fidelity": {
+    "preserved": [
+      "searchable transcript text",
+      "segment timestamps",
+      "representative keyframes",
+      "source SHA-256 identity"
+    ],
+    "not_preserved": [
+      "original audio",
+      "discarded motion",
+      "automatic speaker identities"
+    ]
+  },
+  "local_paths": {
+    "metadata": "data/sample/jury_prizes/package.json",
+    "package": "data/sample/jury_prizes/package.kp"
+  }
+}

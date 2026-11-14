@@ -13,7 +13,7 @@ import json
 import lzma
 import struct
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -43,6 +43,11 @@ class KnowledgeArtifact:
     fidelity: str
     units: int
     text_characters: int
+    reversible: bool
+    searchable: bool
+    ai_ready: bool
+    component_bytes: dict[str, int] = field(default_factory=dict)
+    limitations: tuple[str, ...] = ()
 
     @property
     def saved_bytes(self) -> int:
@@ -55,6 +60,16 @@ class KnowledgeArtifact:
         return self.saved_bytes / self.original_bytes * 100
 
     def metadata(self) -> dict[str, Any]:
+        transcript_bytes = self.component_bytes.get("text", 0)
+        graph_manifest_bytes = self.component_bytes.get(
+            "semantic_graph_uncompressed", transcript_bytes
+        )
+        reference_bytes = self.component_bytes.get("references", 0)
+        unique_visual_bytes = self.component_bytes.get(
+            "frames", self.component_bytes.get("embedded_media_uncompressed", 0)
+        )
+        deduplicated_bytes = self.component_bytes.get("dedup_removed", 0)
+        archive_header_overhead = self.component_bytes.get("container_header", 0)
         return {
             "kind": self.kind,
             "codec": self.codec,
@@ -67,6 +82,22 @@ class KnowledgeArtifact:
             "fidelity": self.fidelity,
             "units": self.units,
             "text_characters": self.text_characters,
+            "reversible": self.reversible,
+            "searchable": self.searchable,
+            "ai_ready": self.ai_ready,
+            "largest_component": max(
+                self.component_bytes,
+                key=self.component_bytes.get,
+                default="none",
+            ),
+            "component_bytes": dict(self.component_bytes),
+            "transcript_bytes": transcript_bytes,
+            "graph_manifest_bytes": graph_manifest_bytes,
+            "reference_bytes": reference_bytes,
+            "unique_visual_bytes": unique_visual_bytes,
+            "deduplicated_bytes": deduplicated_bytes,
+            "archive_header_overhead": archive_header_overhead,
+            "limitations": list(self.limitations),
         }
 
 
@@ -172,6 +203,16 @@ def build_exact_artifact(data: bytes) -> KnowledgeArtifact:
         fidelity="byte-for-byte reversible original file",
         units=1,
         text_characters=0,
+        reversible=True,
+        searchable=False,
+        ai_ready=False,
+        component_bytes={
+            "compressed_payload": len(payload),
+            "container_header": len(package) - len(payload),
+        },
+        limitations=(
+            "Already-compressed inputs may grow because the integrity envelope has overhead.",
+        ),
     )
 
 
@@ -191,6 +232,18 @@ def build_pdf_artifact(data: bytes) -> KnowledgeArtifact:
         fidelity=str(graph["fidelity"]),
         units=result.page_count,
         text_characters=result.text_characters,
+        reversible=False,
+        searchable=True,
+        ai_ready=True,
+        component_bytes={
+            "semantic_graph_uncompressed": result.graph_bytes,
+            "indexed_asset_identities": result.indexed_asset_bytes,
+            "container_header": 6,
+        },
+        limitations=(
+            "Original rendering and embedded image pixels are not preserved.",
+            "OCR quality depends on the source document.",
+        ),
     )
 
 
@@ -209,6 +262,18 @@ def build_pptx_artifact(data: bytes, *, include_media: bool = True) -> Knowledge
         fidelity=result.fidelity,
         units=result.slide_count,
         text_characters=result.text_characters,
+        reversible=False,
+        searchable=True,
+        ai_ready=True,
+        component_bytes={
+            "semantic_graph_uncompressed": result.graph_bytes,
+            "embedded_media_uncompressed": result.optimized_media_bytes,
+            "container_header": 5,
+        },
+        limitations=(
+            "The editable PowerPoint file cannot be reconstructed from semantic mode.",
+            "Embedded media is preserved only when include_media is enabled.",
+        ),
     )
 
 
@@ -252,6 +317,14 @@ def build_video_artifact(
         ),
         units=len(frames),
         text_characters=sum(len(str(segment.get("text", ""))) for segment in segments),
+        reversible=False,
+        searchable=True,
+        ai_ready=True,
+        component_bytes={**report.component_bytes, "container_header": 4},
+        limitations=(
+            "Discarded motion and original audio are not reversible.",
+            "Automatic speaker diarization is not implemented.",
+        ),
     )
 
 
