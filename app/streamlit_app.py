@@ -71,7 +71,7 @@ def load_search_frame(path: str, modified_ns: int) -> bytes:
 
 @st.cache_data
 def prepared_jury_measurement() -> dict[str, Any] | None:
-    """Return verified metrics for the bundled real-video demo package."""
+    """Return recorded source metrics and the local prepared package size."""
     package_json = Path("data/sample/jury_prizes/package.json")
     kp_path = package_json.with_name("package.kp")
     if not package_json.is_file() or not kp_path.is_file():
@@ -106,7 +106,8 @@ def storage_report(package_path: str) -> dict:
     report = pack(package, kp_path)
     source = json.loads(package.read_text(encoding="utf-8"))["source"]
     source_file = package.parent / str(source.get("file", ""))
-    if source_file.is_file():
+    source_available = source_file.is_file()
+    if source_available:
         original = source_file.stat().st_size
         basis = "actual source recording"
     else:
@@ -129,6 +130,7 @@ def storage_report(package_path: str) -> dict:
         "codec": report.codec,
         "components": report.component_bytes,
         "basis": basis,
+        "source_available": source_available,
     }
 
 
@@ -585,7 +587,8 @@ with upload_tab:
                 ),
             )
             st.caption(
-                "Verified against the local source by file size and SHA-256. Search for **winner** to show its transcript and visual context."
+                "Source size and SHA-256 are recorded in the prepared package; its package size is read locally. "
+                "Search for **winner** to show its transcript and visual context."
             )
             st.download_button(
                 "Download prepared .kp package",
@@ -939,16 +942,24 @@ with upload_tab:
 with impact_tab:
     st.subheader("A storage decision in seconds", icon=":material/query_stats:")
     if storage:
-        st.markdown("#### Included technical baseline")
-        st.caption(
-            f"Measured from {storage['basis']}. This small fixture validates the pipeline; it is not presented as a production benchmark."
+        st.markdown(
+            "#### Measured recording baseline" if storage["source_available"]
+            else "#### Included technical fixture (no source video)"
         )
+        st.caption(f"Measured from {storage['basis']}.")
+        if not storage["source_available"]:
+            st.caption(
+                "The demo has no source video. These fixture byte sizes validate packing only; "
+                "the mock source-size metadata is not a measured video compression result."
+            )
         baseline_metrics = st.columns(4)
         baseline_metrics[0].metric(
-            "Fixture input", format_bytes(storage["original_bytes"]), border=True
+            "Source input" if storage["source_available"] else "Fixture input",
+            format_bytes(storage["original_bytes"]), border=True
         )
         baseline_metrics[1].metric(
-            "Fixture package", format_bytes(storage["compact_bytes"]), border=True
+            "Compact package" if storage["source_available"] else "Fixture package",
+            format_bytes(storage["compact_bytes"]), border=True
         )
         baseline_metrics[2].metric(
             savings_label(storage["saved_bytes"]),
