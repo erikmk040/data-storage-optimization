@@ -90,23 +90,29 @@ def _verified_lossy(source: Path, lossless: Path, ocr_text: str) -> Path:
         return lossless
     candidate = lossless.with_name(lossless.stem + ".lossy.webp")
     try:
-        with Image.open(source) as image:
-            image.save(candidate, format="WEBP", quality=90, method=6)
-        with Image.open(source) as original, Image.open(candidate) as encoded:
+        with Image.open(source) as original:
             original_rgb = original.convert("RGB")
-            encoded_rgb = encoded.convert("RGB")
-            score = structural_similarity(
-                __import__("numpy").asarray(original_rgb),
-                __import__("numpy").asarray(encoded_rgb),
-                channel_axis=2,
-            )
             source_ocr = pytesseract.image_to_string(original_rgb).strip()
-            candidate_ocr = pytesseract.image_to_string(encoded_rgb).strip()
-        if score > 0.99 and source_ocr == candidate_ocr == ocr_text.strip():
-            if candidate.stat().st_size < lossless.stat().st_size:
-                lossless.unlink(missing_ok=True)
-                candidate.rename(lossless)
+            declared_ocr = ocr_text.strip()
+            if declared_ocr and source_ocr != declared_ocr:
                 return lossless
+            original_array = __import__("numpy").asarray(original_rgb)
+            # Try progressively smaller WebP candidates. The first accepted
+            # candidate is always verified against the original pixels.
+            for quality in (90, 85, 80, 75, 70):
+                original.save(candidate, format="WEBP", quality=quality, method=6)
+                with Image.open(candidate) as encoded:
+                    encoded_rgb = encoded.convert("RGB")
+                    score = structural_similarity(
+                        original_array,
+                        __import__("numpy").asarray(encoded_rgb),
+                        channel_axis=2,
+                    )
+                    candidate_ocr = pytesseract.image_to_string(encoded_rgb).strip()
+                if score > 0.99 and candidate_ocr == source_ocr and candidate.stat().st_size < lossless.stat().st_size:
+                    lossless.unlink(missing_ok=True)
+                    candidate.rename(lossless)
+                    return lossless
     except Exception:
         pass
     candidate.unlink(missing_ok=True)
