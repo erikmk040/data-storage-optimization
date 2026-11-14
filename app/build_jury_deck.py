@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches, Pt
+
+from app.evidence import load_benchmark_evidence
+from app.integration import build_exact_artifact
 
 
 OUT = Path(__file__).parent / "assets" / "Ericsson_Knowledge_Compression_3min.pptx"
@@ -114,6 +120,20 @@ def notes(slide, value):
 
 
 def build() -> Path:
+    evidence = load_benchmark_evidence(verify_local_files=True)
+    source = evidence["source"]
+    package = evidence["package"]
+    content = evidence["content"]
+    source_mb = f"{source['bytes'] / 1_000_000:.1f} MB"
+    package_mb = f"{package['bytes'] / 1_000_000:.2f} MB"
+    reduction = f"{evidence['saved_percent']:.2f}%"
+    verification = (
+        "Package re-hashed; source metadata matched"
+        if evidence["local_files_verified"]
+        else "Evidence manifest verified; source is not distributed"
+    )
+    exact_control_path = Path(__file__).resolve().parents[1] / "Challenge_Ericsson.docx"
+    exact_control = build_exact_artifact(exact_control_path.read_bytes())
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
@@ -128,32 +148,34 @@ def build() -> Path:
         ("STORAGE OWNERS", "Heavy copies grow", SOFT_BLUE, BLUE),
         ("KNOWLEDGE WORKERS", "Answers stay hidden", SOFT_YELLOW, YELLOW),
         ("OFFBOARDING TEAMS", "Deletion feels unsafe", SOFT_CORAL, CORAL),
+        ("AI / DATA TEAMS", "Useful data stays inactive", SOFT_GREEN, GREEN),
     ]
     for index, (top, bottom, fill, color) in enumerate(story):
-        y = 1.05 + index * 1.48
-        rect(slide, 8.45, y, 4.15, 1.08, fill, line=fill)
-        text(slide, top, 8.76, y + 0.18, 3.45, 0.28, size=10, color=MUTED, bold=True)
-        text(slide, bottom, 8.76, y + 0.49, 3.45, 0.35, size=18, color=color, bold=True)
+        y = 1.05 + index * 1.08
+        rect(slide, 8.45, y, 4.15, 0.84, fill, line=fill)
+        text(slide, top, 8.76, y + 0.11, 3.45, 0.22, size=9, color=MUTED, bold=True)
+        text(slide, bottom, 8.76, y + 0.39, 3.45, 0.27, size=15, color=color, bold=True)
     text(slide, "We asked a simple question:", 0.75, 5.13, 3.4, 0.3, size=15, color=MUTED)
     text(slide, "Can we keep what matters without keeping every byte?", 0.75, 5.52, 10.7, 0.55, size=28, color=BLUE, bold=True)
     footer(slide)
-    notes(slide, "0:00–0:30\nThe brief creates a real tension for three users. Storage owners see large files and copies grow. Knowledge workers cannot find one answer without replaying content. Offboarding teams cannot safely delete a file unless another accessible copy is proven. The causes are full-fidelity media, duplication and information that is not indexed. The symptom is expensive retention or lost knowledge. Can we keep what matters without keeping every byte?")
+    notes(slide, "0:00–0:30\nThe brief creates a real tension for four users. Storage owners see large files and copies grow. Knowledge workers cannot find one answer without replaying content. Offboarding teams cannot safely delete a file unless another accessible copy is proven. AI and data teams cannot activate information that remains trapped in media. The causes are full-fidelity media, duplication and information that is not indexed. Can we keep what matters without keeping every byte?")
 
     slide = blank(prs)
     heading(slide, "We tried it on a real file. This is what happened.", "Our measured proof", 2, "0:30–1:00")
     rect(slide, 0.7, 1.55, 7.7, 4.9, WHITE, line=LINE)
     text(slide, "REAL VIDEO · JURY AND PRIZES.MP4", 1.02, 1.86, 3.7, 0.26, size=10, color=BLUE, bold=True)
-    text(slide, "88.7 MB", 1.02, 2.32, 2.55, 0.62, size=37, bold=True)
-    text(slide, "88,654,139 source bytes", 1.05, 2.94, 2.35, 0.23, size=11, color=MUTED)
+    text(slide, source_mb, 1.02, 2.32, 2.55, 0.62, size=37, bold=True)
+    text(slide, f"{source['bytes']:,} source bytes", 1.05, 2.94, 2.35, 0.23, size=11, color=MUTED)
     arrow(slide, 3.75, 2.52, 0.72)
-    text(slide, "1.20 MB", 4.72, 2.32, 2.8, 0.62, size=37, color=GREEN, bold=True)
+    text(slide, package_mb, 4.72, 2.32, 2.8, 0.62, size=37, color=GREEN, bold=True)
     text(slide, "searchable knowledge package", 4.75, 2.94, 2.8, 0.23, size=11, color=MUTED)
-    text(slide, "98.64%", 1.02, 3.68, 3.25, 0.72, size=48, color=GREEN, bold=True)
+    text(slide, reduction, 1.02, 3.68, 3.25, 0.72, size=48, color=GREEN, bold=True)
     text(slide, "less storage", 1.07, 4.42, 2.5, 0.3, size=16, bold=True)
     rect(slide, 4.64, 3.66, 3.15, 1.18, SOFT_GREEN, line=SOFT_GREEN)
     text(slide, "Still searchable", 4.94, 3.9, 2.55, 0.3, size=18, color=GREEN, bold=True)
-    text(slide, "33 transcript segments · 16 frames", 4.94, 4.28, 2.55, 0.23, size=11, color=MUTED)
-    text(slide, "Measured from the real source. Source size and SHA-256 verified.", 1.03, 5.48, 6.8, 0.3, size=13, color=MUTED)
+    text(slide, f"{content['transcript_segments']} transcript segments · {content['representative_frames']} frames", 4.94, 4.28, 2.55, 0.23, size=11, color=MUTED)
+    text(slide, f"Local video evidence · {verification}.", 1.03, 5.34, 6.8, 0.26, size=11, color=MUTED)
+    text(slide, f"Clean-clone exact control: Challenge_Ericsson.docx · {exact_control.original_bytes:,} → {exact_control.package_bytes:,} B · {exact_control.saved_percent:.2f}% · reversible", 1.03, 5.68, 6.95, 0.44, size=10, color=MUTED)
     rect(slide, 8.72, 1.55, 3.92, 4.9, SOFT_YELLOW, line=SOFT_YELLOW)
     text(slide, "What this number means", 9.03, 1.9, 3.25, 0.35, size=17, bold=True)
     text(slide, "We kept", 9.03, 2.55, 1.25, 0.26, size=11, color=GREEN, bold=True)
@@ -162,7 +184,7 @@ def build() -> Path:
     text(slide, "Original audio and discarded motion", 9.03, 4.25, 3.1, 0.55, size=17, bold=True)
     text(slide, "Need every byte? Exact mode is reversible, but cannot deliver this semantic reduction.", 9.03, 5.2, 3.1, 0.72, size=12, color=MUTED)
     footer(slide)
-    notes(slide, "0:30–1:00\nWe tested the idea on a real six-minute video. The 88,654,139-byte source became a 1,202,334-byte knowledge package: 98.64 percent less storage. It still contains 33 searchable transcript segments and 16 representative frames. This is measured, not projected. Semantic mode does not preserve original audio or every motion frame. Exact mode is available when byte-for-byte recovery matters, but cannot give this reduction.")
+    notes(slide, f"0:30–1:00\nWe tested the idea on a real six-minute video. The {source['bytes']:,}-byte source became a {package['bytes']:,}-byte knowledge package: {reduction} less storage. It still contains {content['transcript_segments']} searchable transcript segments and {content['representative_frames']} representative frames. This is local benchmark evidence; the source is not distributed in the repository. As a clean-clone control, exact mode reduces the tracked challenge document from {exact_control.original_bytes:,} to {exact_control.package_bytes:,} bytes, or {exact_control.saved_percent:.2f} percent, and restores it byte-for-byte. Semantic mode does not preserve original audio or every motion frame.")
 
     slide = blank(prs)
     heading(slide, "Behind the number is a simple idea", "What we built", 3, "1:00–1:30")
@@ -206,7 +228,7 @@ def build() -> Path:
     arrow(slide, 3.58, 3.48, 0.58)
     arrow(slide, 7.88, 3.48, 0.58)
     rich(slide, [("Demo today: ", BLUE, True), ("Streamlit", INK, True), ("   Production path: ", MUTED, False), ("API beside existing systems", INK, True)], 0.75, 5.75, 8.9, 0.35, size=15)
-    text(slide, "Still needed: Ericsson authentication and product-specific connectors", 7.73, 6.2, 4.78, 0.4, size=12, color=CORAL, bold=True, align=PP_ALIGN.RIGHT)
+    text(slide, "Still needed: Ericsson authentication, governance and product connectors", 7.4, 6.2, 5.11, 0.4, size=12, color=CORAL, bold=True, align=PP_ALIGN.RIGHT)
     footer(slide)
     notes(slide, "1:30–1:55\nThe website is only the demo client. The product is the Python core and versioned REST API behind it. It can sit between Ericsson Play, SharePoint, OneDrive or offboarding and existing storage, search and AI systems. The API and streamed video path work today. Ericsson authentication, product connectors and governed deletion approval come next; the prototype never deletes automatically.")
 
@@ -214,9 +236,9 @@ def build() -> Path:
     heading(slide, "Let us show it", "Live demo", 5, "1:55–2:30")
     text(slide, "One file. Four things to watch.", 0.7, 1.4, 7.2, 0.4, size=20, color=MUTED)
     demo_steps = [
-        ("1", "Open", "Prepared real video"),
-        ("2", "Verify", "88.7 MB → 1.20 MB"),
-        ("3", "Check", "98.64% less storage"),
+        ("1", "Open", "Demo or evidence slide"),
+        ("2", "Verify", f"{source_mb} → {package_mb}"),
+        ("3", "Check", f"{reduction} less storage"),
         ("4", "Search", '“winner” + frames'),
     ]
     for index, (number, title, detail) in enumerate(demo_steps):
@@ -236,19 +258,19 @@ def build() -> Path:
         shape.click_action.hyperlink.address = "http://localhost:8511"
     rect(slide, 0.7, 5.12, 11.98, 0.92, SOFT_YELLOW, line=SOFT_YELLOW)
     text(slide, "If the live demo fails", 1.0, 5.34, 2.1, 0.28, size=12, color=YELLOW, bold=True)
-    text(slide, "Verified backup: 88.7 MB → 1.20 MB · 98.64% less · 8 ‘winner’ hits with visual context", 3.0, 5.3, 8.9, 0.35, size=14, bold=True)
-    text(slide, "44/44 tests pass. The real 88.7 MB upload, search frames and REST round-trip were verified.", 0.73, 6.42, 11.3, 0.35, size=14, color=MUTED)
+    text(slide, f"Evidence backup: {source_mb} → {package_mb} · {reduction} less · search returns visual context", 3.0, 5.3, 8.9, 0.35, size=14, bold=True)
+    text(slide, "Automated release tests cover API metadata, exact restoration and semantic search.", 0.73, 6.42, 11.3, 0.35, size=14, color=MUTED)
     footer(slide)
-    notes(slide, "1:55–2:30 — LIVE DEMO\nOpen the demo and show the prepared real-video result: 88.7 MB to 1.20 MB, or 98.64 percent less. Search for winner and show transcript plus actual frames. Say that 44 tests pass and the full upload was verified. Do not transcribe on stage. If the live demo fails, use this measured backup.")
+    notes(slide, f"1:55–2:30 — LIVE DEMO\nIf the local prepared artifact is available, show the verified result: {source_mb} to {package_mb}, or {reduction} less. Otherwise say clearly that the clean demo uses deterministic mock search and show this evidence slide. Search for winner and show transcript plus visual context. Do not transcribe on stage.")
 
     slide = blank(prs)
     heading(slide, "What we know — and what we still need to prove", "A credible next step", 6, "2:30–3:00")
     rect(slide, 0.7, 1.55, 5.82, 4.5, WHITE, line=LINE)
     text(slide, "We know", 1.03, 1.9, 2.3, 0.4, size=23, color=GREEN, bold=True)
     known = [
-        "98.64% measured video reduction",
+        f"{reduction} local video benchmark",
         "Search returns transcript + frames",
-        "API works and 44 tests pass",
+        "API and automated release tests pass",
     ]
     for index, item in enumerate(known):
         y = 2.65 + index * 0.85
